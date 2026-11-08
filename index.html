@@ -36,6 +36,8 @@
   canvas { max-width:100%; box-shadow:0 2px 8px rgba(0,0,0,.25); background:#fff; }
   #msg { padding:20px; color:var(--mut); }
   @media (max-width:700px){ body{flex-direction:column} #side{width:100%;max-width:100%;height:50%} }
+    #bar2 { width:260px; max-width:80%; height:10px; margin:12px auto 0; background:var(--bd); border-radius:6px; overflow:hidden; }
+  #bar2 i { display:block; height:100%; width:0; background:var(--ac); transition:width .2s; }
 </style>
 </head>
 <body>
@@ -56,14 +58,16 @@
     <button id="next">▶</button>
     <button id="zo">−</button><button id="zi">+</button>
   </div>
-  <div id="wrap"><div id="msg">วางไฟล์ <b>marbawi_qc.pdf</b> ไว้โฟลเดอร์เดียวกับ index.html (เปิดผ่านเซิร์ฟเวอร์) หรือเลือกไฟล์ PDF ที่ช่อง "Choose file"</div><canvas id="cv" style="display:none"></canvas></div>
+  <div id="wrap">
+    <div id="msg"><div id="mtxt">กำลังโหลด PDF...</div><div id="bar2"><i></i></div></div>
+    <canvas id="cv" style="display:none"></canvas>
+  </div>
 </div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 <script src="pages.js"></script>
 <script src="words.js"></script><!-- ไม่บังคับ: ถ้าไม่มีไฟล์นี้ก็ใช้ดัชนีหน้าได้ -->
 <script>
-const PDF_URL = "marbawi_qc.pdf";
 pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
 
 /* ---------- ตัวช่วยค้นหา ---------- */
@@ -156,39 +160,84 @@ list.addEventListener("click", e => {
   if (it) goTo(+it.dataset.p + offset());
 });
 
-/* ---------- PDF viewer ---------- */
-let pdf = null, cur = 1, scale = 2.2, busy = false, pending = null;
+/* ---------- PDF viewer (แบ่งหลายไฟล์) ---------- */
+// from/to คือเลขหน้ารวมทั้งเล่ม ถ้าจะแบ่งเป็น 3 ไฟล์ก็เพิ่มรายการได้
+const PARTS = [
+  { url: "marbawi_1.pdf", from: 1,   to: 203 },
+  { url: "marbawi_2.pdf", from: 204, to: 405 },
+  { url: "marbawi_3.pdf", from: 406, to: 608 },
+  { url: "marbawi_4.pdf", from: 609, to: 810 },
+];
+const TOTAL = PARTS[PARTS.length - 1].to;
+
+let cur = 1, scale = 2.2, busy = false, pending = null;
 const cv = document.getElementById("cv"), ctx = cv.getContext("2d");
 const pn = document.getElementById("pn"), tot = document.getElementById("tot"), msg = document.getElementById("msg");
+const mtxt = document.getElementById("mtxt"), fill = document.querySelector("#bar2 i");
+tot.textContent = "/ " + TOTAL;
+pn.max = TOTAL;
+
+function showMsg(text, pct) {
+  msg.style.display = "block";
+  mtxt.textContent = text;
+  fill.style.width = (pct == null ? 100 : pct) + "%";
+}
+
+// โหลดไฟล์ส่วนหนึ่ง (โหลดครั้งเดียว เก็บไว้ใช้ซ้ำ)
+function loadPart(part) {
+  if (part.promise) return part.promise;
+  part.promise = (async () => {
+    const task = pdfjsLib.getDocument(part.url);
+    task.onProgress = p => {
+      if (!part.show) return;
+      if (p.total) {
+        const pct = Math.round(p.loaded / p.total * 100);
+        showMsg("กำลังโหลด " + part.url + "... " + pct + "%", pct);
+      } else {
+        showMsg("กำลังโหลด " + part.url + "... " + (p.loaded / 1048576).toFixed(1) + " MB", 100);
+      }
+    };
+    part.doc = await task.promise;
+    const expect = part.to - part.from + 1;
+    if (part.doc.numPages !== expect)
+      console.warn(part.url + " มี " + part.doc.numPages + " หน้า แต่ตั้งค่าไว้ " + expect + " หน้า");
+    return part.doc;
+  })();
+  part.promise.catch(() => { part.promise = null; });   // ให้ลองโหลดใหม่ได้
+  return part.promise;
+}
 
 async function draw(n) {
-  if (!pdf) return;
   if (busy) { pending = n; return; }
   busy = true;
-  n = Math.max(1, Math.min(pdf.numPages, n));
-  cur = n; pn.value = n;
-  const page = await pdf.getPage(n);
-  const vp = page.getViewport({ scale });
-  const r = window.devicePixelRatio || 1;
-  cv.width = vp.width * r; cv.height = vp.height * r;
-  cv.style.width = vp.width + "px";
-  await page.render({ canvasContext: ctx, viewport: vp, transform: [r,0,0,r,0,0] }).promise;
+  try {
+    n = Math.max(1, Math.min(TOTAL, n));
+    const part = PARTS.find(p => n >= p.from && n <= p.to);
+    part.show = !part.doc;
+    if (part.show) showMsg("กำลังโหลด " + part.url + "...", 0);
+    const doc = await loadPart(part);
+    part.show = false;
+    msg.style.display = "none";
+    cv.style.display = "inline-block";
+
+    cur = n; pn.value = n;
+    const page = await doc.getPage(n - part.from + 1);     // แปลงเป็นเลขหน้าในไฟล์นั้น
+    const vp = page.getViewport({ scale });
+    const r = window.devicePixelRatio || 1;
+    cv.width = vp.width * r; cv.height = vp.height * r;
+    cv.style.width = vp.width + "px";
+    await page.render({ canvasContext: ctx, viewport: vp, transform: [r,0,0,r,0,0] }).promise;
+    document.getElementById("wrap").scrollTop = 0;
+  } catch (e) {
+    showMsg("เปิดไฟล์ไม่ได้: " + e.message, 0);
+  }
   busy = false;
-  document.getElementById("wrap").scrollTop = 0;
   if (pending) { const p = pending; pending = null; draw(p); }
 }
 const goTo = n => draw(n);
 
-async function open(src) {
-  try {
-    pdf = await pdfjsLib.getDocument(src).promise;
-    tot.textContent = "/ " + pdf.numPages;
-    pn.max = pdf.numPages;
-    msg.style.display = "none"; cv.style.display = "inline-block";
-    draw(25);
-  } catch (e) { msg.style.display = "block"; msg.textContent = "เปิด PDF ไม่ได้: " + e.message; }
-}
-open(PDF_URL);
+// เปิดหน้า 25 ก่อน แล้วค่อยโหลดไฟล์ที่เหลือเงียบ ๆ ด้านหลัง
+draw(25).then(() => PARTS.slice(1).forEach(p => loadPart(p).catch(() => {})));
 
 document.getElementById("prev").onclick = () => draw(cur - 1);
 document.getElementById("next").onclick = () => draw(cur + 1);
