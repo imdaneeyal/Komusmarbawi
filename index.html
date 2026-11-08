@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ค้นหา Marbawi</title>
+<style>
+  :root { --bg:#f6f4ef; --card:#fff; --tx:#222; --mut:#777; --ac:#1f6f5c; --bd:#ddd; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#1b1b1b; --card:#262626; --tx:#eee; --mut:#999; --ac:#4fb89c; --bd:#444; }
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family: system-ui, sans-serif; background:var(--bg); color:var(--tx); height:100vh; display:flex; }
+  #side { width:360px; max-width:42%; display:flex; flex-direction:column; border-right:1px solid var(--bd); background:var(--card); }
+  #side header { padding:12px; border-bottom:1px solid var(--bd); }
+  #q { width:100%; font-size:20px; padding:10px; border:1px solid var(--bd); border-radius:8px; background:var(--bg); color:var(--tx); direction:rtl; }
+  #letters { display:flex; flex-wrap:wrap; gap:4px; margin-top:8px; direction:rtl; }
+  #letters button { font-size:18px; padding:2px 8px; min-width:32px; }
+  .row { display:flex; gap:8px; align-items:center; margin-top:8px; font-size:13px; color:var(--mut); flex-wrap:wrap; }
+  .row input[type=number], .row input[type=file] { font-size:13px; }
+  .row input[type=number] { width:64px; padding:3px; }
+  #list { flex:1; overflow:auto; }
+  .item { padding:10px 12px; border-bottom:1px solid var(--bd); cursor:pointer; }
+  .item:hover { background:var(--bg); }
+  .item.est { background:var(--bg); border-left:4px solid var(--ac); }
+  .ar { font-size:22px; direction:rtl; text-align:right; font-family:"Amiri","Traditional Arabic",serif; }
+  .note { font-size:12px; color:var(--mut); direction:rtl; text-align:right; }
+  .ms { font-size:17px; direction:rtl; text-align:right; margin-top:2px; }
+  .pg { font-size:12px; color:var(--ac); margin-top:4px; }
+  .sec { padding:6px 12px; font-size:12px; color:var(--mut); background:var(--bg); }
+  #viewer { flex:1; display:flex; flex-direction:column; min-width:0; }
+  #bar { display:flex; gap:8px; align-items:center; padding:8px 12px; background:var(--card); border-bottom:1px solid var(--bd); flex-wrap:wrap; }
+  button { padding:6px 12px; border:1px solid var(--bd); background:var(--bg); color:var(--tx); border-radius:6px; cursor:pointer; }
+  #pn { width:64px; padding:5px; }
+  #wrap { flex:1; overflow:auto; text-align:center; padding:12px; }
+  canvas { max-width:100%; box-shadow:0 2px 8px rgba(0,0,0,.25); background:#fff; }
+  #msg { padding:20px; color:var(--mut); }
+  @media (max-width:700px){ body{flex-direction:column} #side{width:100%;max-width:100%;height:50%} }
+</style>
+</head>
+<body>
+<div id="side">
+  <header>
+    <input id="q" placeholder="ค้นหา เช่น ابد หรือ أ" autocomplete="off">
+    <div id="letters"></div>
+    <div class="row"><span id="cnt"></span></div>
+  </header>
+  <div id="list"></div>
+</div>
+
+<div id="viewer">
+  <div id="bar">
+    <button id="prev">◀</button>
+    <input type="number" id="pn" value="1" min="1">
+    <span id="tot">/ -</span>
+    <button id="next">▶</button>
+    <button id="zo">−</button><button id="zi">+</button>
+  </div>
+  <div id="wrap"><div id="msg">วางไฟล์ <b>marbawi_qc.pdf</b> ไว้โฟลเดอร์เดียวกับ index.html (เปิดผ่านเซิร์ฟเวอร์) หรือเลือกไฟล์ PDF ที่ช่อง "Choose file"</div><canvas id="cv" style="display:none"></canvas></div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script src="pages.js"></script>
+<script src="words.js"></script><!-- ไม่บังคับ: ถ้าไม่มีไฟล์นี้ก็ใช้ดัชนีหน้าได้ -->
+<script>
+const PDF_URL = "marbawi_qc.pdf";
+pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+
+/* ---------- ตัวช่วยค้นหา ---------- */
+const norm = s => String(s || "")
+  .replace(/[\u064B-\u065F\u0670\u0640\u06D6-\u06ED]/g, "")
+  .replace(/[أإآٱ]/g, "ا").replace(/ؤ/g, "و").replace(/ئ/g, "ي").replace(/ى/g, "ي")
+  .replace(/ک/g, "ك").replace(/ی/g, "ي").replace(/ڤ/g, "ف").replace(/[ݢگ]/g, "ك")
+  .replace(/ة/g, "ه").replace(/\s+/g, " ").trim();
+const arr = v => Array.isArray(v) ? v : (v ? [v] : []);
+const esc = s => String(s).replace(/[&<>]/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[m]));
+
+// ลำดับตัวอักษรอาหรับ (ใช้เทียบ "ก่อน/หลัง" ตามพจนานุกรม)
+const ORDER = "ابتثجحخدذرزسشصضطظعغفقكلمنهوي";
+const key = s => [...norm(s)].map(c => { const i = ORDER.indexOf(c); return String.fromCharCode(i < 0 ? 120 : 97 + i); }).join("");
+
+/* ---------- ดัชนีหน้า (pages.js) ---------- */
+const INDEX = (window.PAGE_INDEX_RAW || "").split("\n").map(l => l.trim()).filter(Boolean).map(l => {
+  const m = l.match(/^(.*)\s+(\d+)$/);
+  if (!m) return null;
+  const words = m[1].split(/[،\/]/).map(x => x.trim()).filter(Boolean);
+  return { page: +m[2], words, nw: words.map(norm), k0: key(words[0]) };
+}).filter(Boolean);
+
+const LETTERS = [["ا",25],["ب",61],["ت",98],["ث",106],["ج",113],["ح",140],["خ",185],["د",218],["ذ",239],["ر",245],["ز",284],["س",298],["ش",335],["ص",355],["ض",371],["ط",380],["ظ",399],["ع",409],["غ",462],["ف",482],["ق",517],["ك",576],["ل",613],["م",645],["ن",700],["ه",765],["و",785],["ي",807]];
+document.getElementById("letters").innerHTML = LETTERS.map(([l,p]) => `<button data-p="${p}" title="หน้า ${p}">${l}</button>`).join("");
+document.getElementById("letters").addEventListener("click", e => {
+  const b = e.target.closest("button"); if (b) goTo(+b.dataset.p + offset());
+});
+
+function estimate(q) {
+  const lead = [...q][0];
+  const li = LETTERS.findIndex(x => x[0] === lead);
+  if (li < 0) return null;
+  const from = LETTERS[li][1], to = (LETTERS[li + 1] ? LETTERS[li + 1][1] : 811) - 1;
+  const kq = key(q);
+  let best = null;
+  for (const e of INDEX) {
+    if (e.page < from || e.page > to) continue;
+    if (e.k0 <= kq) best = e;
+  }
+  return best || INDEX.find(e => e.page === from);
+}
+
+/* ---------- words.js (ไม่บังคับ) ---------- */
+const WORDS = window.WORDS || [];
+let lastP = 1;
+WORDS.forEach(w => { if (w.p) lastP = w.p; w._p = lastP; w._ar = arr(w.ar).map(norm); w._rest = norm([w.note, ...arr(w.ms)].join(" ")); });
+
+/* ---------- ค้นหา + แสดงผล ---------- */
+const list = document.getElementById("list"), cnt = document.getElementById("cnt");
+const offset = () => 0;
+function run(raw) {
+  let q = norm(raw);
+  if (!q) { list.innerHTML = ""; cnt.textContent = ""; return; }
+  if (q.length > 3 && q.startsWith("ال")) q = q.slice(2);
+  let html = "", n = 0;
+
+  const est = estimate(q);
+  if (est) {
+    html += `<div class="sec">หน้าที่น่าจะอยู่ (เรียงตามอักษร)</div>
+      <div class="item est" data-p="${est.page}">
+        <div class="ar">${esc(est.words.join(" ، "))}</div>
+        <div class="pg">หน้า ${est.page} · ถ้าไม่เจอลองหน้าก่อน/หลัง ◀ ▶</div>
+      </div>`;
+  }
+
+  const exact = INDEX.filter(e => e.nw.some(w => w.startsWith(q)) || e.nw.some(w => w === q));
+  if (exact.length) {
+    html += `<div class="sec">หน้าที่คำต้น/ท้ายหน้าตรงกับที่ค้น</div>`;
+    exact.slice(0, 40).forEach(e => { n++;
+      html += `<div class="item" data-p="${e.page}"><div class="ar">${esc(e.words.join(" ، "))}</div><div class="pg">หน้า ${e.page}</div></div>`; });
+  }
+
+  const hits = WORDS.filter(w => w._ar.some(x => x.includes(q)) || w._rest.includes(q)).slice(0, 150);
+  if (hits.length) {
+    html += `<div class="sec">คำในพจนานุกรม (words.js)</div>`;
+    hits.forEach(w => { n++;
+      html += `<div class="item" data-p="${w._p}">
+        <div class="ar">${esc(arr(w.ar).join(" ، "))}</div>
+        ${w.note ? `<div class="note">${esc(w.note)}</div>` : ""}
+        ${w.ms ? `<div class="ms">${esc(arr(w.ms).join(" ، "))}</div>` : ""}
+        <div class="pg">หน้า ${w._p}</div></div>`; });
+  }
+  list.innerHTML = html;
+  cnt.textContent = n ? n + " ผล" : "";
+}
+document.getElementById("q").addEventListener("input", e => run(e.target.value));
+list.addEventListener("click", e => {
+  const it = e.target.closest(".item");
+  if (it) goTo(+it.dataset.p + offset());
+});
+
+/* ---------- PDF viewer ---------- */
+let pdf = null, cur = 1, scale = 2.2, busy = false, pending = null;
+const cv = document.getElementById("cv"), ctx = cv.getContext("2d");
+const pn = document.getElementById("pn"), tot = document.getElementById("tot"), msg = document.getElementById("msg");
+
+async function draw(n) {
+  if (!pdf) return;
+  if (busy) { pending = n; return; }
+  busy = true;
+  n = Math.max(1, Math.min(pdf.numPages, n));
+  cur = n; pn.value = n;
+  const page = await pdf.getPage(n);
+  const vp = page.getViewport({ scale });
+  const r = window.devicePixelRatio || 1;
+  cv.width = vp.width * r; cv.height = vp.height * r;
+  cv.style.width = vp.width + "px";
+  await page.render({ canvasContext: ctx, viewport: vp, transform: [r,0,0,r,0,0] }).promise;
+  busy = false;
+  document.getElementById("wrap").scrollTop = 0;
+  if (pending) { const p = pending; pending = null; draw(p); }
+}
+const goTo = n => draw(n);
+
+async function open(src) {
+  try {
+    pdf = await pdfjsLib.getDocument(src).promise;
+    tot.textContent = "/ " + pdf.numPages;
+    pn.max = pdf.numPages;
+    msg.style.display = "none"; cv.style.display = "inline-block";
+    draw(25);
+  } catch (e) { msg.style.display = "block"; msg.textContent = "เปิด PDF ไม่ได้: " + e.message; }
+}
+open(PDF_URL);
+
+document.getElementById("prev").onclick = () => draw(cur - 1);
+document.getElementById("next").onclick = () => draw(cur + 1);
+pn.addEventListener("change", () => draw(+pn.value));
+document.getElementById("zi").onclick = () => { scale *= 1.2; draw(cur); };
+document.getElementById("zo").onclick = () => { scale /= 1.2; draw(cur); };
+</script>
+</body>
+</html>
